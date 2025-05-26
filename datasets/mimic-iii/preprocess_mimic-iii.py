@@ -4,10 +4,10 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
-# Data path
+# Data Path
 Path(os.path.join('processed')).mkdir(parents=True, exist_ok=True)
 
-# Define the header mapping (adjusted according to the MIMIC-III dataset)
+# Define header mapping.
 column_mapping = {
     'patientid': 'PatientID',
     'hadmid': 'HospitalID',
@@ -76,7 +76,7 @@ column_mapping = {
     'sapsii_admissiontype_score': 'SAPSII_AdmissionType_Score',
 }
 
-# Definition of feature list
+# Definition of the Feature List
 basic_records = ['PatientID', 'RecordTime']
 target_features = ['Outcome', 'LOS', 'Readmission']
 demographic_features = ['Sex', 'Age']
@@ -87,7 +87,7 @@ labtest_features = [
 ]
 normalize_features = ['Age'] + labtest_features + ['LOS']
 
-# ICU score column
+# ICU score columns
 icu_score_columns = [
     'APSIII', 'APSIIIProb', 'APSIII_HR_Score', 'APSIII_MeanBP_Score', 'APSIII_Temperature_Score',
     'APSIII_RespRate_Score', 'APSIII_PAO2_AADO2_Score', 'APSIII_Hematocrit_Score',
@@ -101,39 +101,37 @@ icu_score_columns = [
     'SAPSII_GCS_Score', 'SAPSII_Comorbidity_Score', 'SAPSII_AdmissionType_Score'
 ]
 
-# Read the data.
-file_path = os.path.join("HiRMD/datasets/mimic-iii/mimiciii_format.csv")
+# Read data
+file_path = os.path.join("/home/user1/MXY/TimeAttention/datasets/mimic-iii/mimiciii_format.csv")
 df = pd.read_csv(file_path, on_bad_lines='skip')
 
-# Rename column
 df.rename(columns=column_mapping, inplace=True)
 
-# Recalculate RecordTime
+# Calculate Record Time
 print("Calculating 'RecordTime' for each PatientID based on admittime...")
 df['RecordTime'] = df.groupby('PatientID')['admittime'].rank(method='first', ascending=True).astype(int)
 
-# The conversion time field is in datetime format
+# Convert the time field to datetime format.
 df['admittime'] = pd.to_datetime(df['admittime'])
 df['dischtime'] = pd.to_datetime(df['dischtime'])
 
 # Ensure that the data is sorted by PatientID and RecordTime.
 df = df.sort_values(['PatientID', 'RecordTime'])
 
-# New logic: Filter out groups where ICUStayID is completely empty.
+# Filter out groups where ICUStayID is entirely empty.
 print("Filtering groups with at least one non-null 'ICUStayID'...")
 df = df.groupby('PatientID').filter(lambda group: group['ICUStayID'].notna().any())
 
-# Calculate the interval of time between readmissions after each discharge.
+# Calculate the time interval between each discharge and readmission.
 df['next_admittime'] = df.groupby('PatientID')['admittime'].shift(-1)
 df['LOS'] = (df['dischtime'] - df['admittime']).dt.days
 
 df['time_to_next_admission'] = (df['next_admittime'] - df['dischtime']).dt.days
 
-# Mark 30 days for readmission.
+# Mark for readmission in 30 days.
 readmission_threshold = 30
 df['Readmission'] = (df['time_to_next_admission'] <= readmission_threshold).astype(int)
 
-# There is no next admission date for the last hospitalization record; the default value is filled in.
 df.fillna({'Readmission': 0}, inplace=True)
 
 # Filter out patients with at least 3 records.
@@ -142,7 +140,7 @@ df = df.groupby('PatientID').filter(lambda x: len(x) >= 3)
 # Select the first 48 records for each patient.
 df = df.groupby('PatientID').head(48)
 
-# Increase the code for downward and upward imputation of missing values.
+# Increase the code for downward and upward interpolation of missing values.
 columns_to_process = df.columns.difference(['PatientID', 'DiseaseCodes', 'Disease', 'Medication', 'ProcedureCodes', 'Procedure'])
 df[columns_to_process] = (
     df.groupby('PatientID', group_keys=False)[columns_to_process]
@@ -150,26 +148,31 @@ df[columns_to_process] = (
 )
 df.reset_index(drop=True, inplace=True)
 
-# Increase missing value indicators.
+# Increase the missing value indicator.
 print("Adding missing value indicators...")
 for col in labtest_features:
     df[f'{col}_missing'] = df[col].isnull().astype(int)
 
-# Impute missing values to prevent normalization failure (set to 0 as the fill value).
+# Impute missing values to prevent normalization failure
 df.fillna(0, inplace=True)
 
 # Normalization
 print("Normalizing features...")
 scaler = MinMaxScaler()
 
-# Only normalize the normalize_features.
 df_normalized = df[normalize_features]
 df[normalize_features] = scaler.fit_transform(df_normalized)
 
-# ICU scoring calculation and standardization
+# ICU scoring calculation and standardization.
 print("Calculating and normalizing ICU scores...")
-icu_score_avg = df.groupby('PatientID')[icu_score_columns].mean().reset_index()
-icu_score_avg[icu_score_columns] = scaler.fit_transform(icu_score_avg[icu_score_columns])
+
+exclude_cols = ['APSIIIProb', 'SAPSIIProb']
+cols_mean = [col for col in icu_score_columns if col not in exclude_cols]
+icu_mean = df.groupby('PatientID')[cols_mean].mean()
+icu_max = df.groupby('PatientID')[exclude_cols].max()
+icu_score_avg = pd.concat([icu_mean, icu_max], axis=1).reset_index()
+icu_score_avg[cols_mean] = scaler.fit_transform(icu_score_avg[cols_mean])
+
 
 # Save ICU scoring data.
 icu_output_file = os.path.join("processed", "icu_score_mimic-iii.csv")
@@ -177,38 +180,35 @@ icu_score_avg.to_csv(icu_output_file, index=False)
 print(f"ICU score file saved to: {icu_output_file}")
 
 # Feature extraction
-# Select patient medical, medication, and procedure records
 DDP_columns = ['PatientID', 'RecordTime', 'Disease', 'Medication', 'Procedure']
 df_DDP = df[DDP_columns]
-
-label_columns = ['Outcome', 'LOS', 'Readmission']
+label_columns = ['PatientID', 'Outcome', 'LOS', 'Readmission']
 df_label = df[label_columns]
 
 EHR_columns = ['PatientID', 'RecordTime', 'Sex', 'Age', 'Height', 'Weight', 'PH', 'Hemoglobin', 'Temperature',
                'Glucose', 'Hematocrit', 'PlateletMin', 'PlateletMax', 'WBCMin', 'WBCMax', 'HeartRateMean',
                'SBPMean', 'DBPMean', 'MBPMean', 'RespiratoryRateMean', 'SpO2Mean']
-# Add a missing value indicator column.
 EHR_columns += [f'{col}_missing' for col in labtest_features]
 df_EHR = df[EHR_columns]
 
-# Save the processed dataset to a CSV file.
+# Save the results.
 df_EHR.to_csv(os.path.join("processed", "EHR_mimic-iii.csv"), index=False)
 df_DDP.to_csv(os.path.join("processed", "DDP_mimic-iii.csv"), index=False)
 df_label.to_csv(os.path.join("processed", "label_mimic-iii.csv"), index=False)
 
 print("Success for saving files.")
 
-# # mini
+# # mimic-iii mini
 # import os
 # from pathlib import Path
 # import numpy as np
 # import pandas as pd
 # from sklearn.preprocessing import MinMaxScaler
 #
-# # Data path
+# # Data Path
 # Path(os.path.join('processed')).mkdir(parents=True, exist_ok=True)
 #
-# # Define the header mapping (adjusted according to the MIMIC-III dataset)
+# # Define header mapping
 # column_mapping = {
 #     'patientid': 'PatientID',
 #     'hadmid': 'HospitalID',
@@ -277,10 +277,10 @@ print("Success for saving files.")
 #     'sapsii_admissiontype_score': 'SAPSII_AdmissionType_Score',
 # }
 #
-# # Definition of feature list
+# # Definition of Feature List
 # basic_records = ['PatientID', 'RecordTime']
 # target_features = ['Outcome', 'LOS', 'Readmission']
-# demographic_features = ['Sex', 'Age']
+# demographic_features = ['Sex', 'Age']  # Sex is binary, Age is continuous
 # labtest_features = [
 #     'Height', 'Weight', 'PH', 'Hemoglobin', 'Temperature', 'Glucose', 'Hematocrit',
 #     'PlateletMin', 'PlateletMax', 'WBCMin', 'WBCMax', 'HeartRateMean', 'SBPMean',
@@ -288,7 +288,7 @@ print("Success for saving files.")
 # ]
 # normalize_features = ['Age'] + labtest_features + ['LOS']
 #
-# # ICU score column
+# # ICU scoring columns
 # icu_score_columns = [
 #     'APSIII', 'APSIIIProb', 'APSIII_HR_Score', 'APSIII_MeanBP_Score', 'APSIII_Temperature_Score',
 #     'APSIII_RespRate_Score', 'APSIII_PAO2_AADO2_Score', 'APSIII_Hematocrit_Score',
@@ -302,39 +302,38 @@ print("Success for saving files.")
 #     'SAPSII_GCS_Score', 'SAPSII_Comorbidity_Score', 'SAPSII_AdmissionType_Score'
 # ]
 #
-# # Read the data.
-# file_path = os.path.join("HiRMD/datasets/mimic-iii/mimiciii_format.csv")
+# # Read datas
+# file_path = os.path.join("/home/user1/MXY/TimeAttention/datasets/mimic-iii/mimiciii_format.csv")
 # df = pd.read_csv(file_path, on_bad_lines='skip')
 #
-# # Rename column
+# # Rename Column
 # df.rename(columns=column_mapping, inplace=True)
 #
-# # Calculate RecordTime
+# # Calculate Record Time
 # print("Calculating 'RecordTime' for each PatientID based on admittime...")
 # df['RecordTime'] = df.groupby('PatientID')['admittime'].rank(method='first', ascending=True).astype(int)
 #
-# # The conversion time field is in datetime format
+# # Convert the time field to datetime format.
 # df['admittime'] = pd.to_datetime(df['admittime'])
 # df['dischtime'] = pd.to_datetime(df['dischtime'])
 #
 # # Ensure that the data is sorted by PatientID and RecordTime.
 # df = df.sort_values(['PatientID', 'RecordTime'])
 #
-# # New logic: Filter out groups where ICUStayID is completely empty.
+# # Filter out groups where the ICUStayID is entirely empty.
 # print("Filtering groups with at least one non-null 'ICUStayID'...")
 # df = df.groupby('PatientID').filter(lambda group: group['ICUStayID'].notna().any())
 #
-# # Calculate the interval of time between readmissions after each discharge.
+# # Calculate the time interval between each discharge and readmission.
 # df['next_admittime'] = df.groupby('PatientID')['admittime'].shift(-1)
 # df['LOS'] = (df['dischtime'] - df['admittime']).dt.days
 #
-# df['time_to_next_admission'] = (df['next_admittime'] - df['dischtime']).dt.days  Calculate the time difference (days)
+# df['time_to_next_admission'] = (df['next_admittime'] - df['dischtime']).dt.days
 #
-# # Mark 30 days for readmission.
-# readmission_threshold = 30  # Define the readmission time threshold (30 days).
+# # Re-admission marked for 30 days.
+# readmission_threshold = 30
 # df['Readmission'] = (df['time_to_next_admission'] <= readmission_threshold).astype(int)
 #
-# # There is no next admission date for the last hospitalization record; the default value is filled in.
 # df.fillna({'Readmission': 0}, inplace=True)
 #
 # # Filter out patients with at least 3 records.
@@ -343,7 +342,7 @@ print("Success for saving files.")
 # # Select the first 48 records for each patient.
 # df = df.groupby('PatientID').head(48)
 #
-# # Increase the code for downward and upward imputation of missing values.
+# # Add code for downward and upward interpolation of missing values.
 # columns_to_process = df.columns.difference(['PatientID', 'DiseaseCodes', 'Disease', 'Medication', 'ProcedureCodes', 'Procedure'])
 # df[columns_to_process] = (
 #     df.groupby('PatientID', group_keys=False)[columns_to_process]
@@ -351,21 +350,19 @@ print("Success for saving files.")
 # )
 # df.reset_index(drop=True, inplace=True)
 #
-# # Increase missing value indicators.
+# # Add a missing value indicator.
 # print("Adding missing value indicators...")
 # for col in labtest_features:
 #     df[f'{col}_missing'] = df[col].isnull().astype(int)
 #
-# # Impute missing values to prevent normalization failure (set to 0 as the fill value).
+# # Impute missing values to prevent normalization failure
 # df.fillna(0, inplace=True)
 #
 # # Adjust the ratio of death to survival to approximately 0.23.
 # print("Adjusting death/survival ratio to approximately 0.23...")
 #
-# # Obtain the unique outcome for each patient.
 # patients = df.drop_duplicates(subset='PatientID')[['PatientID', 'Outcome']]
 #
-# # Separating deceased and surviving patients
 # dead_patients = patients[patients['Outcome'] == 1]
 # survived_patients = patients[patients['Outcome'] == 0]
 #
@@ -373,52 +370,52 @@ print("Success for saving files.")
 # desired_N_d = int(0.23 * N_s)
 # N_d_current = len(dead_patients)
 #
-# print(f"The current number of surviving patients.: {N_s}")
-# print(f"The current number of deceased patients.: {N_d_current}")
+# print(f"Current number of living patients: {N_s}")
+# print(f"Current number of deceased patients.: {N_d_current}")
 # print(f"Expected number of deceased patients: {desired_N_d}")
 #
 # if N_d_current > desired_N_d:
-#     # Randomly select the expected number of deceased patients.
 #     sampled_dead_patients = dead_patients.sample(n=desired_N_d, random_state=42)
-#     print(f"{desired_N_d} patients with deaths were drawn to achieve the target proportion.")
+#     print(f"Extracted {desired_N_d} deceased patients to achieve the target ratio.")
 # else:
-#     # If the current number of deceased patients is less than or equal to the expected amount, then all deceased patients shall be retained.
 #     sampled_dead_patients = dead_patients
 #     print("The current number of deceased patients has met or is below the target ratio, and there is no need for removal.")
 #
-# # Merge surviving patients and screened deceased patients.
+# # Merged surviving patients and the deceased patients after screening.
 # filtered_patients = pd.concat([survived_patients, sampled_dead_patients])
 #
-# # Filter the master dataset to retain only the selected patients.
+# # Filter the main dataset, retaining only the selected patients.
 # df = df[df['PatientID'].isin(filtered_patients['PatientID'])]
 #
-# # Calculate and display the new death and survival ratio.
+# # Calculate and display the new mortality and survival ratios.
 # final_patients = df.drop_duplicates(subset='PatientID')[['PatientID', 'Outcome']]
 # final_dead = final_patients[final_patients['Outcome'] == 1]
 # final_survived = final_patients[final_patients['Outcome'] == 0]
 # final_ratio = len(final_dead) / len(final_survived) if len(final_survived) > 0 else 0
-# print(f"Adjusted dead-to-alive ratio: {final_ratio:.2f} (target is approximately 0.23)")
+# print(f"Adjusted mortality and survival ratio: {final_ratio:.2f}")
 #
 # # Normalization
 # print("Normalizing features...")
 # scaler = MinMaxScaler()
 #
-# # Only normalize the normalize_features.
 # df_normalized = df[normalize_features]
 # df[normalize_features] = scaler.fit_transform(df_normalized)
 #
-# # ICU scoring calculation and standardization
+# # ICU Score Calculation and Standardization
 # print("Calculating and normalizing ICU scores...")
-# icu_score_avg = df.groupby('PatientID')[icu_score_columns].mean().reset_index()
-# icu_score_avg[icu_score_columns] = scaler.fit_transform(icu_score_avg[icu_score_columns])
+# exclude_cols = ['APSIIIProb', 'SAPSIIProb']
+# cols_mean = [col for col in icu_score_columns if col not in exclude_cols]
+# icu_mean = df.groupby('PatientID')[cols_mean].mean()
+# icu_max = df.groupby('PatientID')[exclude_cols].max()
+# icu_score_avg = pd.concat([icu_mean, icu_max], axis=1).reset_index()
+# icu_score_avg[cols_mean] = scaler.fit_transform(icu_score_avg[cols_mean])
 #
 # # Save ICU scoring data.
 # icu_output_file = os.path.join("processed", "icu_score_mimic-iii.csv")
 # icu_score_avg.to_csv(icu_output_file, index=False)
 # print(f"ICU score file saved to: {icu_output_file}")
 #
-# # Feature extraction
-# # Select patient medical, medication, and procedure records
+# # Feature Extraction
 # DDP_columns = ['PatientID', 'RecordTime', 'Disease', 'Medication', 'Procedure']
 # df_DDP = df[DDP_columns]
 #
@@ -428,11 +425,11 @@ print("Success for saving files.")
 # EHR_columns = ['PatientID', 'RecordTime', 'Sex', 'Age', 'Height', 'Weight', 'PH', 'Hemoglobin', 'Temperature',
 #                'Glucose', 'Hematocrit', 'PlateletMin', 'PlateletMax', 'WBCMin', 'WBCMax', 'HeartRateMean',
 #                'SBPMean', 'DBPMean', 'MBPMean', 'RespiratoryRateMean', 'SpO2Mean']
-# # Add a missing value indicator column.
+# # Add a column indicating missing values.
 # EHR_columns += [f'{col}_missing' for col in labtest_features]
 # df_EHR = df[EHR_columns]
 #
-# # Save the processed dataset to a CSV file.
+# # Save the results.
 # df_EHR.to_csv(os.path.join("processed", "EHR_mimic-iii.csv"), index=False)
 # df_DDP.to_csv(os.path.join("processed", "DDP_mimic-iii.csv"), index=False)
 # df_label.to_csv(os.path.join("processed", "label_mimic-iii.csv"), index=False)
