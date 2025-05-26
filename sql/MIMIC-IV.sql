@@ -243,7 +243,7 @@ SELECT
     idf.stay_id,
 
     aps.apsiii,
-    apsiii_prob,
+    aps.apsiii_prob,
     aps.hr_score AS aps_hr_score,
     aps.mbp_score AS aps_mbp_score,
     aps.temp_score AS aps_temp_score,
@@ -262,7 +262,7 @@ SELECT
     aps.gcs_score AS aps_gcs_score,
 
     saps.sapsii,
-    sapsii_prob,
+    saps.sapsii_prob,
     saps.age_score AS saps_age_score,
     saps.hr_score AS saps_hr_score,
     saps.sysbp_score AS saps_sysbp_score,
