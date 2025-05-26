@@ -59,7 +59,7 @@ icu_score_columns = [
 ]
 
 # Read data
-file_path = os.path.join("/home/user1/MXY/TimeAttention/datasets/mimic-iv/mimiciv_format.csv")
+file_path = os.path.join("HiRMD/datasets/mimic-iv/mimiciv_format.csv")
 df = pd.read_csv(file_path, on_bad_lines='skip')
 
 print("Calculating 'admittime_rank' for each PatientID...")
