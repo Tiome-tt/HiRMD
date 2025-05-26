@@ -102,7 +102,7 @@ icu_score_columns = [
 ]
 
 # Read data
-file_path = os.path.join("/home/user1/MXY/TimeAttention/datasets/mimic-iii/mimiciii_format.csv")
+file_path = os.path.join("HiRMD/datasets/mimic-iii/mimiciii_format.csv")
 df = pd.read_csv(file_path, on_bad_lines='skip')
 
 df.rename(columns=column_mapping, inplace=True)
@@ -303,7 +303,7 @@ print("Success for saving files.")
 # ]
 #
 # # Read datas
-# file_path = os.path.join("/home/user1/MXY/TimeAttention/datasets/mimic-iii/mimiciii_format.csv")
+# file_path = os.path.join("HiRMD/datasets/mimic-iii/mimiciii_format.csv")
 # df = pd.read_csv(file_path, on_bad_lines='skip')
 #
 # # Rename Column
