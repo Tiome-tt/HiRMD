@@ -1,15 +1,47 @@
-## Code for paper <HiRMD: Improving In-Hospital Mortality Prediction via Prompting LLMs with High-Risk Medical Cues>
+# Code for the paper: *HiRMD: A System for Mortality Prediction via LLM-Based High-Risk Information Extraction and Diagnosis*
 
-### Datasets
-In order to protect the personal data of patients from being leaked, we provide only one data point for each dataset to facilitate the reader's understanding of our experimental setup.
+## Datasets
 
-### Steps
+To protect patient privacy, we provide only a single sample instance from each dataset. These examples are included solely to help readers understand the data format and the experimental setup used in our work.
 
-Step 1. Download the MIMIC dataset and store it in PostgreSQL. Run the corresponding SQL code, export the `result_table` as a CSV file, and save it with a new name to the designated path, such as `HiRMD/datasets/mimic-iii/mimiciii_format.csv`.
+## Quick Start
 
-Step 2. Run the corresponding data preprocessing script, such as `HiRMD/datasets/mimic-iii/preprocess_mimic-iii.py`.
+### 🧩**Step 1. Prepare the MIMIC dataset**
 
-Step 3. Modify the configuration file. Then proceed with LLM medical diagnosis by sequentially running `HiRMD/LLM_medical_diagnosis/unique_process.py`, `HiRMD/LLM_medical_diagnosis/LLM_target_extraction.py`, `HiRMD/LLM_medical_diagnosis/visits_matching.py`, and `HiRMD/LLM_medical_diagnosis/LLM_Diagnosis.py`.
+Download the MIMIC dataset and import it into a PostgreSQL database.  
+Run the provided SQL scripts, export the resulting `result_table` as a CSV file, and save it under an appropriate filename and path, such as:
 
-Step 4. Finally, run `main.py` to obtain the experimental results.
+```
+HiRMD/datasets/mimic-iii/mimiciii_format.csv
+```
+
+### 🧹**Step 2. Run data preprocessing**
+
+Execute the corresponding preprocessing script for the dataset:
+
+```
+HiRMD/datasets/mimic-iii/preprocess_mimic-iii.py
+```
+
+### 🩺**Step 3. Configure and run the LLM-based medical diagnosis module**
+
+Modify the configuration file as needed.  
+Then sequentially run:
+
+```
+HiRMD/LLM_medical_diagnosis/unique_process.py
+HiRMD/LLM_medical_diagnosis/LLM_target_extraction.py
+HiRMD/LLM_medical_diagnosis/visits_matching.py
+HiRMD/LLM_medical_diagnosis/LLM_Diagnosis.py
+```
+
+### 🚀**Step 4. Train the model and obtain results**
+
+Finally, run:
+
+```
+main.py
+```
+
+to reproduce the experimental results reported in the paper.
 
