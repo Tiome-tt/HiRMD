@@ -1,0 +1,2 @@
+PatientID,GCS,GCS_Motor,GCS_Verbal,GCS_Eyes,GCS_Unable,GCS_Intub,Fall_Risk,Delirium_Score,Sedation_Score,Sedation_Goal,Pain_Score,Pain_Goal
+003-10109,0.881587302,0.943650794,0.81047619,0.877380952,0,0,0,0,0.454545455,0.625,0.000535775,0.000979432
