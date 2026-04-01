@@ -1,5 +1,7 @@
 import os
+import sys
 import json
+import random
 import pandas as pd
 import numpy as np
 import torch
@@ -12,14 +14,28 @@ import torch.optim as optim
 from sklearn.preprocessing import StandardScaler
 from torch.optim.lr_scheduler import StepLR
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
-from TimeAttention.config.config import datasets, Hidden_Size, Num_Layers, Learning_Rate, Num_Epochs, Batch_Size, \
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
+
+from config.config import datasets, Hidden_Size, Num_Layers, Learning_Rate, Num_Epochs, Batch_Size, \
     Dropout, Input_Features
 
-# 1. Data loading and preprocessing
-data_file = f"HiRMD/datasets/{datasets}/processed/EHR_{datasets}.csv"
-label_file = f"HiRMD/datasets/{datasets}/processed/label_{datasets}.csv"
-gpt_response_file = f"HiRMD/LLM_medical_diagnosis/outputs/LLM_Diagnosis_{datasets}.jsonl"
-icu_file = f"HiRMD/datasets/{datasets}/processed/icu_score_{datasets}.csv"
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+data_file = f"HiRMD/TimeAttention/datasets/{datasets}/processed/EHR_{datasets}.csv"
+label_file = f"HiRMD/TimeAttention/datasets/{datasets}/processed/label_{datasets}.csv"
+gpt_response_file = f"HiRMD/TimeAttention/LLM_medical_diagnosis/outputs/LLM_Diagnosis_{datasets}_GPT-4o.jsonl"
+icu_file = f"HiRMD/TimeAttention/datasets/{datasets}/processed/icu_score_{datasets}.csv"
 
 df = pd.read_csv(data_file)
 labels = pd.read_csv(label_file)
@@ -27,77 +43,37 @@ labels = pd.read_csv(label_file)
 if len(df) != len(labels):
     raise ValueError("The number of rows in the feature data and label data do not match!")
 
-df['Outcome'] = labels['Outcome']
-# df['LOS'] = labels['LOS']
-# df['Readmission'] = labels['Readmission']
-df = df.sort_values(by=['PatientID', 'RecordTime'])
+labels["Outcome"] = labels["Outcome"].astype(int)
+df["Outcome"] = labels["Outcome"]
+df = df.sort_values(by=["PatientID", "RecordTime"])
 
-# Loading GPT features.
 gpt_dict = {}
-with open(gpt_response_file, 'r') as f:
+with open(gpt_response_file, "r") as f:
     for line in f:
         data = json.loads(line)
-        pid = data['PatientID']
-        gpt_seq = [int(x) for x in data['response'].split(',')]
+        pid = data["PatientID"]
+        gpt_seq = [int(x) for x in data["response"].split(",")]
         gpt_dict[pid] = gpt_seq
 
-# ICU scoring data
-icu_df = pd.read_csv(icu_file)
-icu_df = icu_df.set_index('PatientID')
+icu_df = pd.read_csv(icu_file).set_index("PatientID")
 icu_features = list(icu_df.columns)
-icu_scores_dict = icu_df.to_dict(orient='index')
+icu_scores_dict = icu_df.to_dict(orient="index")
 
 input_features = Input_Features
-label_column = 'Outcome'
+label_column = "Outcome"
 
-# normalize
 all_features = df[input_features].values
 scaler = StandardScaler().fit(all_features)
 
 X_list, y_list, pids = [], [], []
-grouped = df.groupby('PatientID')
+grouped = df.groupby("PatientID")
 for patient_id, group in grouped:
-    group = group.sort_values(by='RecordTime')
+    group = group.sort_values(by="RecordTime")
     scaled_feat = scaler.transform(group[input_features].values)
     X_list.append(torch.tensor(scaled_feat, dtype=torch.float32))
-    y_list.append(torch.tensor(group[label_column].values[-1], dtype=torch.float32))
+    y_list.append(int(group[label_column].values[-1]))
     pids.append(patient_id)
 
-X_padded = pad_sequence(X_list, batch_first=True, padding_value=0.0)
-y = torch.tensor(y_list, dtype=torch.float32)
-
-# Dataset splitting
-X_train_full, X_temp, y_train_full, y_temp, pids_train_full, pids_temp = train_test_split(
-    X_padded, y, pids, test_size=0.2, random_state=42)
-X_val, X_test, y_val, y_test, pids_val, pids_test = train_test_split(
-    X_temp, y_temp, pids_temp, test_size=0.5, random_state=42)
-
-# Over-sampling of the training set.
-ros = RandomOverSampler(random_state=42)
-X_train_flat = X_train_full.reshape(X_train_full.shape[0], -1).numpy()
-y_train_np = y_train_full.numpy()
-
-train_df = pd.DataFrame(X_train_flat)
-train_df['y'] = y_train_np
-train_df['pid'] = pids_train_full
-train_df.columns = train_df.columns.astype(str)
-
-X_cols = [c for c in train_df.columns if c != 'y']
-y_col = 'y'
-
-X_resampled, y_resampled = ros.fit_resample(train_df[X_cols], train_df[y_col])
-train_df_resampled = pd.DataFrame(X_resampled, columns=X_cols)
-train_df_resampled['y'] = y_resampled
-
-pids_train_resampled = train_df_resampled['pid'].values
-train_df_resampled = train_df_resampled.drop(['y', 'pid'], axis=1)
-X_train_res_np = train_df_resampled.values
-
-X_train_resampled = torch.tensor(X_train_res_np.reshape(-1, X_train_full.shape[1], X_train_full.shape[2]), dtype=torch.float32)
-y_train_resampled = torch.tensor(y_resampled, dtype=torch.float32)
-pids_train_resampled = pids_train_resampled.tolist()
-
-# 2. Dataset class
 class EHRDataset(Dataset):
     def __init__(self, X, y, pids, gpt_dict, icu_dict, icu_features):
         self.X = X
@@ -115,13 +91,11 @@ class EHRDataset(Dataset):
         y = self.y[idx]
         pid = self.pids[idx]
 
-        # GPT feature
         if pid in self.gpt_dict:
             gpt_feature = torch.tensor(self.gpt_dict[pid], dtype=torch.float32)
         else:
             gpt_feature = torch.zeros(14, dtype=torch.float32)
 
-        # ICU feature
         if pid in self.icu_dict:
             icu_vals = [self.icu_dict[pid][col] for col in self.icu_features]
             icu_feature = torch.tensor(icu_vals, dtype=torch.float32)
@@ -130,29 +104,28 @@ class EHRDataset(Dataset):
 
         return x, y, gpt_feature, icu_feature
 
-train_dataset = EHRDataset(X_train_resampled, y_train_resampled, pids_train_resampled, gpt_dict, icu_scores_dict, icu_features)
-val_dataset = EHRDataset(X_val, y_val, pids_val, gpt_dict, icu_scores_dict, icu_features)
-test_dataset = EHRDataset(X_test, y_test, pids_test, gpt_dict, icu_scores_dict, icu_features)
-
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
-
-# 3. Model Definition
 class TransformerFusionModel(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, output_size,
-                 gpt_seq_len=14, icu_feature_dim=33 if datasets=="mimic-iv" else 35 if datasets == "mimic-iii" else None,
+                 gpt_seq_len=14, icu_feature_dim=33,
                  dropout=0.3, embed_dim=32, mlp_hidden_dim=64):
         super(TransformerFusionModel, self).__init__()
-        nhead = max(1, input_size // 4)
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=input_size, nhead=input_size // 4 if input_size % 4 == 0 else 1, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+
+        nhead = input_size // 4 if input_size % 4 == 0 and input_size >= 4 else 1
+
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            d_model=input_size,
+            nhead=nhead,
+            dropout=dropout,
+            batch_first=False
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            self.encoder_layer,
+            num_layers=num_layers
+        )
 
         self.gpt_linear = nn.Linear(gpt_seq_len, embed_dim)
         self.icu_linear = nn.Linear(icu_feature_dim, embed_dim)
 
-        # The output dimension of the Transformer = input_size
-        # The dimension after fusion = input_size + embed_dim (GPT) + embed_dim (ICU)
         fusion_input_dim = input_size + embed_dim + embed_dim
 
         self.mlp = nn.Sequential(
@@ -172,10 +145,9 @@ class TransformerFusionModel(nn.Module):
                     nn.init.constant_(m.bias, 0.0)
 
     def forward(self, x, gpt_feature, icu_feature):
-        # x: [batch, seq_len, input_size]
-        x = x.permute(1, 0, 2)
-        transformer_out = self.transformer_encoder(x)
-        final_out = transformer_out[-1, :, :]
+        x = x.permute(1, 0, 2)  # [seq_len, batch, input_size]
+        transformer_out = self.transformer_encoder(x)  # [seq_len, batch, input_size]
+        final_out = transformer_out[-1, :, :]  # [batch, input_size]
 
         gpt_embed = self.gpt_linear(gpt_feature)
         icu_embed = self.icu_linear(icu_feature)
@@ -184,11 +156,12 @@ class TransformerFusionModel(nn.Module):
         out = self.mlp(fusion)
         return out
 
-# 4. Transf training, validation, and testing functions
+
 def accuracy_calc(outputs, labels):
     predictions = (torch.sigmoid(outputs.squeeze()) > 0.5).float()
     correct = (predictions == labels).sum().item()
     return correct / len(labels)
+
 
 def evaluate_metrics(outputs, labels):
     prob = torch.sigmoid(outputs).cpu().numpy()
@@ -198,23 +171,26 @@ def evaluate_metrics(outputs, labels):
     acc = (preds == labels).mean()
     try:
         auc = roc_auc_score(labels, prob)
-    except:
-        auc = float('nan')
+    except Exception:
+        auc = float("nan")
     try:
         auprc = average_precision_score(labels, prob)
-    except:
-        auprc = float('nan')
+    except Exception:
+        auprc = float("nan")
     try:
         f1 = f1_score(labels, preds)
-    except:
-        f1 = float('nan')
+    except Exception:
+        f1 = float("nan")
+
     return acc, auc, auprc, f1
+
 
 def train_model(model, train_loader, criterion, optimizer, device):
     model.train()
     total_loss = 0
     total_samples = 0
     total_correct = 0
+
     for X_batch, y_batch, gpt_batch, icu_batch in train_loader:
         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
         gpt_batch = gpt_batch.to(device)
@@ -234,11 +210,13 @@ def train_model(model, train_loader, criterion, optimizer, device):
 
     return total_loss / total_samples, total_correct / total_samples
 
+
 def evaluate_model(model, loader, criterion, device):
     model.eval()
     total_loss = 0
     all_outputs = []
     all_labels = []
+
     with torch.no_grad():
         for X_batch, y_batch, gpt_batch, icu_batch in loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
@@ -258,52 +236,168 @@ def evaluate_model(model, loader, criterion, device):
     acc, auc, auprc, f1 = evaluate_metrics(all_outputs, all_labels)
     return avg_loss, acc, auc, auprc, f1
 
+
 def evaluate_test_model(model, test_loader, device, criterion):
     return evaluate_model(model, test_loader, criterion, device)
 
-# 5. Training model (adding early stopping mechanism and learning rate scheduling)
-input_size = len(input_features)
-hidden_size = 64
-num_layers = 2
-output_size = 1
-learning_rate = 0.0005
-num_epochs = 100
 
-icu_feature_dim = len(icu_features)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = TransformerFusionModel(input_size, hidden_size, num_layers, output_size,
-                               gpt_seq_len=14, icu_feature_dim=icu_feature_dim).to(device)
+def run_once(seed):
+    print(f"\n{'=' * 20} Running seed = {seed} {'=' * 20}")
+    set_seed(seed)
 
-criterion = nn.BCEWithLogitsLoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
+    # 数据集拆分
+    X_train, X_temp, y_train, y_temp, pids_train, pids_temp = train_test_split(
+        X_list, y_list, pids,
+        test_size=0.2,
+        random_state=seed,
+        stratify=y_list
+    )
+    X_val, X_test, y_val, y_test, pids_val, pids_test = train_test_split(
+        X_temp, y_temp, pids_temp,
+        test_size=0.5,
+        random_state=seed,
+        stratify=y_temp
+    )
 
-best_val_acc = 0.0
-epochs_no_improve = 0
-patience = 10
-best_model_path = 'HiRMD/saved_models/best_transformer_model.pth'
+    X_train_padded = pad_sequence(X_train, batch_first=True, padding_value=0.0)
+    X_val_padded = pad_sequence(X_val, batch_first=True, padding_value=0.0)
+    X_test_padded = pad_sequence(X_test, batch_first=True, padding_value=0.0)
 
-for epoch in range(num_epochs):
-    train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
-    val_loss, val_acc, val_auc, val_auprc, val_f1 = evaluate_model(model, val_loader, criterion, device)
-    scheduler.step()
+    y_train = np.array(y_train, dtype=int)
+    y_val = np.array(y_val, dtype=int)
+    y_test = np.array(y_test, dtype=int)
 
-    print(f"Epoch {epoch+1}/{num_epochs}")
-    print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
-    print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val AUC: {val_auc:.4f}, Val AUPRC: {val_auprc:.4f}, Val F1: {val_f1:.4f}")
+    X_train_flat = X_train_padded.reshape(X_train_padded.shape[0], -1).numpy()
 
-    # The early stopping logic is based on the validation set accuracy.
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        epochs_no_improve = 0
-        torch.save(model.state_dict(), best_model_path)
-    else:
-        epochs_no_improve += 1
-        if epochs_no_improve >= patience:
-            print("Early stopping triggered.")
-            break
+    train_arr = np.hstack([
+        X_train_flat,
+        y_train.reshape(-1, 1),
+        np.array(pids_train, dtype=object).reshape(-1, 1)
+    ])
+    columns = [f"feat_{i}" for i in range(X_train_flat.shape[1])] + ["y", "pid"]
+    train_df = pd.DataFrame(train_arr, columns=columns)
+    train_df["y"] = train_df["y"].astype(int)
 
-# Load the best model.
-model.load_state_dict(torch.load(best_model_path))
-test_loss, test_acc, test_auc, test_auprc, test_f1 = evaluate_test_model(model, test_loader, device, criterion)
-print(f"Test Results - Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, AUC: {test_auc:.4f}, AUPRC: {test_auprc:.4f}, F1: {test_f1:.4f}")
+    X_cols = [c for c in train_df.columns if c != "y"]
+    y_col = "y"
+
+    ros = RandomOverSampler(random_state=seed)
+    X_resampled, y_resampled = ros.fit_resample(train_df[X_cols], train_df[y_col])
+
+    train_df_resampled = pd.concat([X_resampled, pd.DataFrame({"y": y_resampled})], axis=1)
+    if "pid" not in train_df_resampled.columns:
+        raise KeyError("pid column not found after resampling.")
+
+    pids_train_resampled = train_df_resampled["pid"].values
+    train_df_resampled = train_df_resampled.drop(["y", "pid"], axis=1)
+
+    X_train_res_np = train_df_resampled.values.astype(float)
+    X_train_resampled = torch.tensor(
+        X_train_res_np.reshape(-1, X_train_padded.shape[1], X_train_padded.shape[2]),
+        dtype=torch.float32
+    )
+    y_train_resampled = torch.tensor(y_resampled, dtype=torch.float32)
+
+    train_dataset = EHRDataset(
+        X_train_resampled, y_train_resampled, pids_train_resampled,
+        gpt_dict, icu_scores_dict, icu_features
+    )
+    val_dataset = EHRDataset(
+        X_val_padded, torch.tensor(y_val, dtype=torch.float32), pids_val,
+        gpt_dict, icu_scores_dict, icu_features
+    )
+    test_dataset = EHRDataset(
+        X_test_padded, torch.tensor(y_test, dtype=torch.float32), pids_test,
+        gpt_dict, icu_scores_dict, icu_features
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+    input_size = len(input_features)
+    hidden_size = 64
+    num_layers = 2
+    output_size = 1
+    learning_rate = 0.0005
+    num_epochs = 100
+
+    icu_feature_dim = len(icu_features)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = TransformerFusionModel(
+        input_size, hidden_size, num_layers, output_size,
+        gpt_seq_len=14, icu_feature_dim=icu_feature_dim
+    ).to(device)
+
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
+
+    best_val_acc = 0.0
+    epochs_no_improve = 0
+    patience = 3
+    best_model_path = f"HiRMD/TimeAttention/saved_models/best_transformer_model_seed_{seed}.pth"
+
+    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+
+    for epoch in range(num_epochs):
+        train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
+        val_loss, val_acc, val_auc, val_auprc, val_f1 = evaluate_model(model, val_loader, criterion, device)
+        scheduler.step()
+
+        print(f"Seed {seed} | Epoch {epoch+1}/{num_epochs}")
+        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+        print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, "
+              f"Val AUC: {val_auc:.4f}, Val AUPRC: {val_auprc:.4f}, Val F1: {val_f1:.4f}")
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            epochs_no_improve = 0
+            torch.save(model.state_dict(), best_model_path)
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Seed {seed}: Early stopping triggered.")
+                break
+
+    model.load_state_dict(torch.load(best_model_path))
+    test_loss, test_acc, test_auc, test_auprc, test_f1 = evaluate_test_model(
+        model, test_loader, device, criterion
+    )
+
+    print(f"Seed {seed} Test Results - "
+          f"Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, "
+          f"AUC: {test_auc:.4f}, AUPRC: {test_auprc:.4f}, F1: {test_f1:.4f}")
+
+    return {
+        "seed": seed,
+        "loss": test_loss,
+        "acc": test_acc,
+        "auc": test_auc,
+        "auprc": test_auprc,
+        "f1": test_f1
+    }
+
+
+seeds = [42, 1024, 2023, 8888, 9999]
+all_results = []
+
+for seed in seeds:
+    result = run_once(seed)
+    all_results.append(result)
+
+results_df = pd.DataFrame(all_results)
+
+print("\n" + "=" * 30)
+print("Results of 5 runs:")
+print(results_df)
+
+metrics = ["loss", "acc", "auc", "auprc", "f1"]
+print("\n" + "=" * 30)
+print("Mean ± Std on test set:")
+for metric in metrics:
+    mean_val = results_df[metric].mean()
+    std_val = results_df[metric].std(ddof=1)
+    print(f"{metric.upper()}: {mean_val:.4f} ± {std_val:.4f}")
+
