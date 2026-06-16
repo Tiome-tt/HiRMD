@@ -45,3 +45,18 @@ main.py
 
 to reproduce the experimental results reported in the paper.
 
+## Citation
+
+If you find this paper or code useful for your research, please consider citing our work:
+
+```bibtex
+@article{meng2026hirmd,
+  title={{HiRMD}: A System for Mortality Prediction via LLM-Based High-Risk Information Extraction and Diagnosis},
+  author={Meng, Xiaoyang and Liu, Yang and Zhang*, Weiyu and Zhou, Xiaoding and Peng, Xueping and Zhu, Fa and Vasilakos, Athanasios V. and Lu, Wenpeng},
+  journal={IEEE Transactions on Biomedical Engineering},
+  year={2026},
+  note={Accepted},
+  url={https://github.com/Tiome-tt/HiRMD}
+}
+```
+
